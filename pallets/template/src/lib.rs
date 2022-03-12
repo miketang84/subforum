@@ -31,8 +31,7 @@ pub mod pallet {
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
-        ArticleIndexInserted(T::AccountId, Vec<u8>),
-        ArticleIndexUpdated(T::AccountId, Vec<u8>),
+        ArticleIndexUpdated(T::AccountId, Vec<u8>, Vec<u8>),
     }
 
     #[pallet::error]
@@ -57,9 +56,80 @@ pub mod pallet {
     // pub(super) fn ArticleNonceDefault() -> u64 { 0 }
     // pub(super) type ArticleNonce =
     //    StorageValue<Value = u64, QueryKind = ValueQuery, OnEmpty = ArticleNonceDefault>;
+
+    #[pallet::storage]
+    pub(super) type CallCounterMap = 
+        StorageMap<_, Blake2_128Concat, Vec<u8>, u64, ValueQuery>;  
     
     #[pallet::hooks]
-    impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {}
+    impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+        fn offchain_worker(block_number: T::BlockNumber) {
+            // get article nonce
+            // let nonce = ArticleNonce::get();
+
+            // TODO: define the Handler
+            let method_table: Vec<(&[u8], Handler)> = vec![
+                (b"article_post", article::article_post),
+                //b"article_update",
+                //b"article_delete",
+                //b"comment_post",
+                //b"comment_delete",
+            ];
+
+            
+            for (method_name, method_handler) in method_table {
+                // get bottom number
+                let bottom_key = Self::derive_pcbottom(&method_name);
+                let stbottom = StorageValueRef::persistent(bottom_key);
+                let bottom = if let Ok(Some(res)) = stbottom.get::<u64>() {
+                    //log::info!("cached result: {:?}", res);
+                    res
+                }
+                else {
+                    stbottom.set(&0);
+                    0
+                }
+
+                // get top number
+                let top_key = Self::derive_pctop(&method_name);
+                let sttop = StorageValueRef::persistent(top_key);
+                let top = if let Ok(Some(res)) = sttop.get::<u64>() {
+                    //log::info!("cached result: {:?}", res);
+                    res
+                }
+                else {
+                    sttop.set(&0);
+                    0
+                }
+
+                // iterate on all incoming calls
+                for n in bottom..top {
+                    //let nonce = CallCounterMap::get(&method_name);
+                    let storage_key = Self::derive_key(&method_name, n + 1);
+                    let storage_ref = StorageValueRef::persistent(&storage_key);
+                    
+                    // get the value of this local storage key
+                    if let Ok(Some(data)) = storage_ref.get::<Vec<u8>>() {
+                        // data is the raw value, do something
+                        
+                        // decode the raw data, which is json format
+                        // let json_param = data.decode() 
+
+                        // put this json struct to the handler, call handler
+                        // let result = *method_handler(json_param)
+
+                        // How to process the result of a handler?
+
+
+                    }
+
+                }
+    
+            }
+
+            Ok(())
+        }
+    }
 
     #[pallet::call]
     impl<T: Config> Pallet<T> {
@@ -73,43 +143,79 @@ pub mod pallet {
             //let sender = ensure_root(origin)?;
 
             // self increasing
-            ArticleNonce::mutate(|nonce| nonce + 1);
+            // ArticleNonce::mutate(|nonce| nonce + 1);
+
+            let method_name = b"article_post";
+            if CallCounterMap::contains_key(&method_name) {
+                CallCounterMap::mutate(&method_name, |top| {
+                    top + 1
+                })
+            }
+            else {
+                // this first time call
+                CallCounterMap::set(&method_name, 1);
+            }
+            // or just use mutate?
+            // CallCounterMap::mutate(&method_name, |top| top + 1);
+        
 
             // get latest nonce and write to local storage
-            let nonce = ArticleNonce::get();
-            let storage_key = WRITE_KEY_PREFIX.to_string() + ":" + "article_post:" + &nonce.to_string();
+            //let nonce = ArticleNonce::get();
+            let nonce = CallCounterMap::get(&method_name);
+            let storage_key = Self::derive_key(&method_name, nonce);
             offchain_index::set(&storage_key, &new_article_objbin);
-            let storage_key = WRITE_KEY_PREFIX.to_string() + ":" + "article_post:top";
+            let storage_key = Self::derive_pctop(&method_name);
             offchain_index::set(&storage_key, &nonce.to_string());
 
             Ok(())
         }
 
         #[pallet::weight(10_000)]
-        pub fn revoke_claim(
+        pub fn article_update_index(
             origin: OriginFor<T>,
-            proof: Vec<u8>,
+            article_id: Vec<u8>,
+            article_hash: Vec<u8>,
             ) -> DispatchResult {
-            // Check that the extrinsic was signed and get the signer.
-            // This function will return an error if the extrinsic is not signed.
-            // https://docs.substrate.io/v3/runtime/origins
+
             let sender = ensure_signed(origin)?;
+            //let sender = ensure_root(origin)?;
 
-            // Verify that the specified proof has been claimed.
-            ensure!(Proofs::<T>::contains_key(&proof), Error::<T>::NoSuchProof);
+            // insert id hash pair index, if exists, override it
+            ArticleIdHashMap::insert(&article_id, &article_hash);
 
-            // Get owner of the claim.
-            let (owner, _) = Proofs::<T>::get(&proof);
-
-            // Verify that sender of the current call is the claim owner.
-            ensure!(sender == owner, Error::<T>::NotProofOwner);
-
-            // Remove claim from storage.
-            Proofs::<T>::remove(&proof);
-
-            // Emit an event that the claim was erased.
-            Self::deposit_event(Event::ClaimRevoked(sender, proof));
+            // Emit an event
+            Self::deposit_event(Event::ArticleIndexUpdated(sender, article_id, article_hash));
             Ok(())
+        }
+    }
+
+    impl<T: Config> Pallet<T> {
+        fn derive_key(method_name: &[u8], nonce: u64) -> Vec<u8> {
+            WRITE_KEY_PREFIX.clone().into_iter()
+                .chain(b":".into_iter())
+                .chain(method_name.into_iter())
+                .chain(b":".into_iter())
+                .chain(nonce.to_string().into_iter())
+                .copied()
+                .collect::<Vec<u8>>()
+        }
+
+        fn derive_pctop(method_name: &[u8]) -> Vec<u8> {
+            WRITE_KEY_PREFIX.clone().into_iter()
+                .chain(b":".into_iter())
+                .chain(method_name.into_iter())
+                .chain(b":top".into_iter())
+                .copied()
+                .collect::<Vec<u8>>()
+        }
+
+        fn derive_pcbottom(method_name: &[u8]) -> Vec<u8> {
+            WRITE_KEY_PREFIX.clone().into_iter()
+                .chain(b":".into_iter())
+                .chain(method_name.into_iter())
+                .chain(b":bottom".into_iter())
+                .copied()
+                .collect::<Vec<u8>>()
         }
     }
 }

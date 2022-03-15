@@ -14,6 +14,7 @@ use model::{
 // Re-export pallet items so that they can be accessed from the crate namespace.
 pub use pallet::*;
 
+
 const WRITE_KEY_PREFIX: &[u8] = b"WRITEP";
 
 
@@ -49,7 +50,7 @@ pub mod pallet {
     pub(super) type ArticleIdHashMap = 
         StorageMap<_, Blake2_128Concat, Vec<u8>, Vec<u8>, ValueQuery>;  
    
-    // the article post increasing counter, default 0
+    // the article post increasing counter, default 3
     #[pallet::storage]
     pub(super) type ArticleNonce = StorageValue<_, u64, ValueQuery>;
     // #[pallet::type_value]
@@ -67,8 +68,8 @@ pub mod pallet {
             // get article nonce
             // let nonce = ArticleNonce::get();
 
-            // TODO: define the Handler
-            let method_table: Vec<(&[u8], Handler)> = vec![
+            // TODO: define the Handler, using Fn trait, just like this
+            let method_table: Vec<(&[u8], dyn Fn(Json) -> Result<(), ()>)> = vec![
                 (b"article_post", article::article_post),
                 //b"article_update",
                 //b"article_delete",
@@ -113,10 +114,13 @@ pub mod pallet {
                         // data is the raw value, do something
                         
                         // decode the raw data, which is json format
-                        // let json_param = data.decode() 
+                        // deserialized by serde
+                        // let json_param = data.parse()
+                        // extract the inner obj info
+                        // let json_obj = json_param.obj
 
                         // put this json struct to the handler, call handler
-                        // let result = *method_handler(json_param)
+                        // let result = *method_handler(json_obj)
 
                         // How to process the result of a handler?
 
